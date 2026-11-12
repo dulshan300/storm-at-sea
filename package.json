@@ -1,0 +1,17 @@
+{
+  "name": "fleet-strike",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Two-player real-time naval grid battle game (Pusher + Upstash Redis + Vercel)",
+  "type": "module",
+  "scripts": {
+    "dev": "vercel dev"
+  },
+  "dependencies": {
+    "@upstash/redis": "^1.34.0",
+    "pusher": "^5.2.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
