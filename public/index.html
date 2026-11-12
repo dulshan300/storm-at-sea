@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Fleet Strike</title>
+  <meta name="description" content="Real-time two-player naval grid battle. Hide your fleet, hunt theirs." />
+  <meta name="theme-color" content="#05080f" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚓</text></svg>" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;800;900&family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <!-- Atmosphere -->
+  <div class="sky" aria-hidden="true"></div>
+  <div class="lightning" id="lightning" aria-hidden="true"></div>
+  <div class="rain" aria-hidden="true"></div>
+  <div class="sea" aria-hidden="true">
+    <div class="wave w1"></div><div class="wave w2"></div><div class="wave w3"></div>
+  </div>
+
+  <button class="sound-toggle" id="soundToggle" aria-label="Toggle sound" title="Toggle sound (M)">🔊</button>
+
+  <div id="app">
+    <!-- LOBBY -->
+    <section id="lobby" class="screen active">
+      <div class="crest">
+        <div class="crest-emblem">⚓</div>
+        <h1 class="title">FLEET<span>STRIKE</span></h1>
+        <p class="tagline">Hide your fleet. Hunt theirs. Leave nothing afloat.</p>
+      </div>
+
+      <div class="panel lobby-panel">
+        <label class="field">
+          <span>Captain's name</span>
+          <input id="nameInput" maxlength="16" placeholder="Admiral Nobody" autocomplete="off" />
+        </label>
+
+        <button class="btn btn-gold btn-lg" id="createBtn">⚔ Raise a New Battle</button>
+
+        <div class="divider"><span>or join an ally's war room</span></div>
+
+        <div class="join-row">
+          <input id="codeInput" maxlength="8" placeholder="ROOM CODE" autocomplete="off" />
+          <button class="btn btn-steel" id="joinBtn">Join</button>
+        </div>
+        <p class="error" id="lobbyError" role="alert"></p>
+      </div>
+
+      <ol class="howto">
+        <li><b>Deploy</b> five warships on your grid.</li>
+        <li><b>Fire</b> in turns at the enemy's hidden waters.</li>
+        <li><b>Sink</b> every enemy ship to claim the sea.</li>
+      </ol>
+    </section>
+
+    <!-- GAME -->
+    <section id="game" class="screen">
+      <header class="hud">
+        <div class="hud-side">
+          <div class="captain me"><span class="dot"></span><span id="meName">You</span></div>
+        </div>
+        <div class="hud-center">
+          <div class="room-chip" id="roomChip" title="Click to copy invite link">
+            ROOM <b id="roomCode">-----</b> <span class="copy">⧉</span>
+          </div>
+          <div class="banner" id="banner">Deploy your fleet</div>
+        </div>
+        <div class="hud-side right">
+          <div class="captain opp" id="oppBox"><span class="dot"></span><span id="oppName">Awaiting rival…</span></div>
+        </div>
+      </header>
+
+      <div class="boards">
+        <!-- MY BOARD -->
+        <div class="board-wrap" id="myWrap">
+          <h2 class="board-title">Your Fleet</h2>
+          <div class="board" id="myBoard"></div>
+          <div class="fleet-status" id="myFleetStatus"></div>
+        </div>
+
+        <!-- PLACEMENT PANEL / ENEMY BOARD -->
+        <div class="board-wrap" id="placeWrap">
+          <h2 class="board-title">Shipyard</h2>
+          <div class="panel place-panel">
+            <p class="hint">Pick a ship, then click your grid to deploy it. Click a deployed ship to move it. Press <kbd>R</kbd> to rotate.</p>
+            <div class="ship-list" id="shipList"></div>
+            <div class="place-actions">
+              <button class="btn btn-steel" id="rotateBtn">↻ Rotate <small id="orient">Horizontal</small></button>
+              <button class="btn btn-steel" id="randomBtn">🎲 Random</button>
+              <button class="btn btn-steel" id="clearBtn">✕ Clear</button>
+            </div>
+            <button class="btn btn-gold btn-lg" id="readyBtn" disabled>Battle Stations!</button>
+            <p class="ready-note" id="readyNote"></p>
+          </div>
+        </div>
+
+        <div class="board-wrap hidden" id="enemyWrap">
+          <h2 class="board-title enemy">Enemy Waters</h2>
+          <div class="board enemy-board" id="enemyBoard">
+            <div class="radar" aria-hidden="true"></div>
+          </div>
+          <div class="fleet-status" id="enemyFleetStatus"></div>
+        </div>
+      </div>
+
+      <div class="log panel" id="log" aria-live="polite"></div>
+    </section>
+  </div>
+
+  <!-- Big announcements -->
+  <div class="announce" id="announce" aria-live="assertive"></div>
+
+  <!-- End overlay -->
+  <div class="overlay" id="overlay">
+    <div class="overlay-card">
+      <div class="overlay-emblem" id="ovEmblem">⚓</div>
+      <h2 id="ovTitle">VICTORY</h2>
+      <p id="ovText"></p>
+      <div class="stats" id="ovStats"></div>
+      <button class="btn btn-gold btn-lg" id="rematchBtn">⚔ Rematch</button>
+      <p class="ready-note" id="rematchNote"></p>
+      <button class="btn btn-link" id="leaveBtn">Leave battle</button>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <script src="https://js.pusher.com/8.2.0/pusher.min.js"></script>
+  <script src="audio.js"></script>
+  <script src="game.js"></script>
+</body>
+</html>
