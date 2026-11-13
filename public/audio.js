@@ -52,9 +52,9 @@
     g.exponentialRampToValueAtTime(0.0001, t + attack + decay);
   }
 
-  /** Oscillator voice: freq may slide to `to`. */
-  function tone({ freq, to = freq, dur = 0.2, type = "sine", gain = 0.3, attack = 0.005, delay = 0, filter = null }) {
-    const t = now() + delay;
+  /** Oscillator voice: freq may slide to `to`. `at` (absolute time) and `out` are used by the music sequencer. */
+  function tone({ freq, to = freq, dur = 0.2, type = "sine", gain = 0.3, attack = 0.005, delay = 0, filter = null, at = null, out = null }) {
+    const t = at ?? now() + delay;
     const o = ctx.createOscillator();
     const g = ctx.createGain();
     o.type = type;
@@ -67,13 +67,13 @@
       f.type = "lowpass"; f.frequency.value = filter;
       node.connect(f); node = f;
     }
-    node.connect(g).connect(master);
+    node.connect(g).connect(out || master);
     o.start(t); o.stop(t + attack + dur + 0.05);
   }
 
   /** Filtered noise burst: filter cutoff may sweep from `freq` to `to`. */
-  function noise({ dur = 0.3, type = "lowpass", freq = 1000, to = freq, q = 0.8, gain = 0.4, attack = 0.005, delay = 0 }) {
-    const t = now() + delay;
+  function noise({ dur = 0.3, type = "lowpass", freq = 1000, to = freq, q = 0.8, gain = 0.4, attack = 0.005, delay = 0, at = null, out = null }) {
+    const t = at ?? now() + delay;
     const src = ctx.createBufferSource();
     src.buffer = noiseBuf;
     src.loop = true;
@@ -83,7 +83,7 @@
     if (to !== freq) f.frequency.exponentialRampToValueAtTime(Math.max(to, 20), t + attack + dur);
     const g = ctx.createGain();
     env(g, t, gain, attack, dur);
-    src.connect(f).connect(g).connect(master);
+    src.connect(f).connect(g).connect(out || master);
     src.start(t, Math.random() * 1.5);
     src.stop(t + attack + dur + 0.05);
   }
@@ -169,6 +169,212 @@
     try { bank[name](...args); } catch { /* never let audio break the game */ }
   }
 
+  // ---------- background music ----------
+  // An original, procedurally performed score in D minor. Two moods follow the game:
+  //   calm   — lobby & deployment: slow pads, low bass, sparse bells, sea swell
+  //   battle — battle phase: taiko drums, driving bass, horn melody (enters on the 2nd loop)
+  // The music fades out at the end of a battle so the victory/defeat stinger stands out.
+  const MUSIC_KEY = "fs_music";
+  const MUSIC_VOL = 0.8;
+  let musicOn = true;
+  try { musicOn = localStorage.getItem(MUSIC_KEY) !== "0"; } catch { /* storage blocked */ }
+
+  const hz = (m) => 440 * 2 ** ((m - 69) / 12);
+  const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
+
+  function pad(notes, t, dur, out, gain, cutoff) {
+    const f = ctx.createBiquadFilter();
+    f.type = "lowpass"; f.frequency.value = cutoff; f.Q.value = 0.5;
+    const g = ctx.createGain();
+    const atk = Math.min(1.2, dur * 0.3), rel = Math.min(1.5, dur * 0.35);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(gain, t + atk);
+    g.gain.setValueAtTime(gain, t + dur - rel);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur + 0.2);
+    f.connect(g).connect(out);
+    notes.forEach((m) => [-7, 7].forEach((cents) => {
+      const o = ctx.createOscillator();
+      o.type = "sawtooth"; o.frequency.value = hz(m); o.detune.value = cents;
+      o.connect(f); o.start(t); o.stop(t + dur + 0.3);
+    }));
+  }
+
+  function lead(m, t, dur, out) { // brass-like horn with delayed vibrato
+    const g = ctx.createGain();
+    const f = ctx.createBiquadFilter();
+    f.type = "lowpass"; f.Q.value = 1.2;
+    f.frequency.setValueAtTime(900, t);
+    f.frequency.linearRampToValueAtTime(2000, t + 0.08);
+    f.frequency.linearRampToValueAtTime(1400, t + dur);
+    const vib = ctx.createOscillator(), vibAmt = ctx.createGain();
+    vib.frequency.value = 5.5;
+    vibAmt.gain.setValueAtTime(0, t);
+    vibAmt.gain.linearRampToValueAtTime(5, t + Math.min(0.25, dur));
+    vib.connect(vibAmt);
+    [["sawtooth", 0], ["square", 5]].forEach(([type, det]) => {
+      const o = ctx.createOscillator();
+      o.type = type; o.frequency.value = hz(m); o.detune.value = det;
+      vibAmt.connect(o.frequency);
+      o.connect(f); o.start(t); o.stop(t + dur + 0.2);
+    });
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.075, t + 0.03);
+    g.gain.setValueAtTime(0.06, t + Math.max(0.04, dur - 0.08));
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur + 0.12);
+    f.connect(g).connect(out);
+    vib.start(t); vib.stop(t + dur + 0.2);
+  }
+
+  function bell(m, t, out, gain = 0.05) {
+    tone({ freq: hz(m), dur: 2.4, gain, attack: 0.004, at: t, out });
+    tone({ freq: hz(m) * 2.76, dur: 0.9, gain: gain * 0.35, attack: 0.002, at: t, out }); // inharmonic shimmer
+  }
+
+  // Drum kit (battle)
+  const kick = (t, out, big) => {
+    tone({ freq: big ? 140 : 110, to: 42, dur: big ? 0.45 : 0.28, gain: big ? 0.6 : 0.38, attack: 0.002, at: t, out });
+    noise({ dur: 0.06, freq: 600, gain: big ? 0.25 : 0.12, attack: 0.001, at: t, out });
+  };
+  const tom = (t, out, f) => tone({ freq: f, to: f * 0.62, dur: 0.2, gain: 0.26, attack: 0.002, at: t, out });
+  const rim = (t, out) => noise({ dur: 0.05, type: "bandpass", freq: 2600, q: 5, gain: 0.14, attack: 0.001, at: t, out });
+  const hat = (t, out, g = 0.03) => noise({ dur: 0.03, type: "highpass", freq: 7500, gain: g, attack: 0.001, at: t, out });
+
+  //                      pad voicing (MIDI)    bass root
+  const CALM = [
+    { pad: [50, 57, 62, 65], root: 38 }, // Dm
+    { pad: [46, 53, 58, 62], root: 34 }, // Bb
+    { pad: [48, 53, 57, 60], root: 41 }, // F
+    { pad: [48, 55, 60, 64], root: 36 }, // C
+  ];
+  const BATTLE = [
+    { pad: [50, 57, 62, 65], root: 38 }, // Dm
+    { pad: [46, 53, 58, 62], root: 34 }, // Bb
+    { pad: [48, 55, 60, 64], root: 36 }, // C
+    { pad: [45, 52, 57, 61], root: 33 }, // A (dominant, raised 7th)
+  ];
+  // Battle melody: per bar, [16th-step, MIDI note, length in 16ths]
+  const MELODY = [
+    [[0, 74, 3], [3, 69, 1], [4, 74, 2], [6, 76, 2], [8, 77, 6], [14, 76, 2]],
+    [[0, 74, 4], [4, 77, 2], [6, 74, 2], [8, 70, 8]],
+    [[0, 72, 3], [3, 67, 1], [4, 72, 2], [6, 74, 2], [8, 76, 4], [12, 79, 4]],
+    [[0, 81, 6], [6, 79, 2], [8, 77, 2], [10, 76, 2], [12, 73, 4]],
+  ];
+
+  const SONGS = {
+    calm: {
+      bpm: 70, vol: 1.3,
+      step(n, t, out, sd) {
+        const bar = Math.floor(n / 16) % 8, s = n % 16, ch = CALM[Math.floor(bar / 2)];
+        if (s === 0 && bar % 2 === 0) {
+          pad(ch.pad, t, sd * 32, out, 0.035, 850);
+          tone({ freq: hz(ch.root), dur: sd * 30, gain: 0.16, attack: 0.4, at: t, out });
+          tone({ freq: hz(ch.root + 12), dur: sd * 28, type: "triangle", gain: 0.05, attack: 0.6, at: t, out });
+          noise({ dur: sd * 26, freq: 260, to: 520, gain: 0.05, attack: sd * 10, at: t, out }); // sea swell
+        }
+        if (s % 4 === 0 && Math.random() < 0.3) bell(pick(ch.pad) + 12 + (Math.random() < 0.35 ? 12 : 0), t, out);
+      },
+    },
+    battle: {
+      bpm: 128, vol: 1,
+      step(n, t, out, sd) {
+        const loop = Math.floor(n / 64), bar = Math.floor(n / 16) % 4, s = n % 16, ch = BATTLE[bar];
+        if (s === 0) pad(ch.pad, t, sd * 16, out, 0.022, 700);
+        // Driving bass: eighth notes with octave pops.
+        if (s % 2 === 0) {
+          const m = ch.root + (s === 6 || s === 14 ? 12 : 0);
+          tone({ freq: hz(m), dur: sd * 1.6, type: "sawtooth", gain: 0.12, attack: 0.005, filter: 420, at: t, out });
+        }
+        // Taiko pattern, with a tom fill closing every 4th bar.
+        if (s === 0 || s === 8) kick(t, out, true);
+        if (bar === 3 && s >= 12) tom(t, out, [230, 200, 170, 140][s - 12]);
+        else if (s === 3 || s === 6 || s === 11 || s === 14) tom(t, out, s % 2 ? 190 : 160);
+        if (s === 4 || s === 12) rim(t, out);
+        if (s % 2 === 1) hat(t, out, s % 4 === 3 ? 0.035 : 0.02);
+        // Melody from the second loop on, resting every 4th loop to breathe.
+        if (loop >= 1 && loop % 4 !== 3) {
+          for (const [st, m, len] of MELODY[bar]) if (st === s) lead(m, t, sd * len * 0.95, out);
+        } else if (s === 0 && loop > 0) {
+          bell(ch.pad[3] + 12, t, out, 0.04);
+        }
+      },
+    },
+  };
+
+  let musicBus = null, current = null, stepCount = 0, nextTime = 0;
+  const moodBus = {};
+
+  function ensureMusic() {
+    if (musicBus) return true;
+    if (!init()) return false;
+    musicBus = ctx.createGain();
+    musicBus.gain.value = musicOn ? MUSIC_VOL : 0;
+    musicBus.connect(master);
+    for (const k of Object.keys(SONGS)) {
+      moodBus[k] = ctx.createGain();
+      moodBus[k].gain.value = 0;
+      moodBus[k].connect(musicBus);
+    }
+    return true;
+  }
+
+  function desiredMood() {
+    const S = window.FleetState;
+    if (!S || S.phase === "lobby" || S.phase === "placing") return "calm";
+    if (S.phase === "battle") return "battle";
+    return null; // "over": let the stinger ring out
+  }
+
+  function switchMood(m) {
+    const t = ctx.currentTime;
+    if (current) {
+      moodBus[current].gain.cancelScheduledValues(t);
+      moodBus[current].gain.setTargetAtTime(0, t, 0.5);
+    }
+    current = m;
+    stepCount = 0;
+    nextTime = t + 0.15;
+    if (m) {
+      moodBus[m].gain.cancelScheduledValues(t);
+      moodBus[m].gain.setTargetAtTime(SONGS[m].vol, t, m === "battle" ? 0.2 : 1.2);
+    }
+  }
+
+  // Look-ahead sequencer: schedules notes ~300ms ahead so timing stays tight even on slow phones.
+  function musicTick() {
+    if (!ctx || ctx.state !== "running" || muted || !musicOn || document.hidden) return;
+    if (!ensureMusic()) return;
+    const want = desiredMood();
+    if (want !== current) switchMood(want);
+    if (!current) return;
+    const song = SONGS[current];
+    const sd = 60 / song.bpm / 4;
+    if (nextTime < ctx.currentTime) nextTime = ctx.currentTime + 0.05; // resumed after a pause
+    while (nextTime < ctx.currentTime + 0.3) {
+      try { song.step(stepCount, nextTime, moodBus[current], sd); } catch { /* keep the beat going */ }
+      stepCount++;
+      nextTime += sd;
+    }
+  }
+  setInterval(musicTick, 80);
+
+  const musicBtn = document.getElementById("musicToggle");
+  function renderMusic() {
+    if (!musicBtn) return;
+    musicBtn.classList.toggle("off", !musicOn);
+    musicBtn.setAttribute("aria-pressed", String(musicOn));
+    musicBtn.setAttribute("aria-label", musicOn ? "Turn music off" : "Turn music on");
+  }
+  function toggleMusic() {
+    musicOn = !musicOn;
+    try { localStorage.setItem(MUSIC_KEY, musicOn ? "1" : "0"); } catch { /* ignore */ }
+    unlock();
+    if (musicBus) musicBus.gain.setTargetAtTime(musicOn ? MUSIC_VOL : 0, ctx.currentTime, 0.15);
+    if (musicOn && current) nextTime = 0; // restart scheduling from "now"
+    renderMusic();
+  }
+  if (musicBtn) musicBtn.addEventListener("click", toggleMusic);
+  renderMusic();
+
   // ---------- mute toggle ----------
   const btn = document.getElementById("soundToggle");
   function renderToggle() {
@@ -191,5 +397,5 @@
   });
   renderToggle();
 
-  window.SFX = { play, unlock, toggle, get muted() { return muted; } };
+  window.SFX = { play, unlock, toggle, toggleMusic, get muted() { return muted; }, get musicOn() { return musicOn; } };
 })();

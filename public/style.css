@@ -164,6 +164,14 @@ input:focus { border-color: var(--gold); box-shadow: 0 0 0 3px rgba(232, 184, 74
   border: 1px solid rgba(232, 184, 74, 0.35); background: rgba(10, 20, 36, 0.8); cursor: pointer; font-size: 19px;
 }
 
+.music-toggle { right: 66px; }
+.sound-toggle { touch-action: manipulation; transition: opacity 0.2s; }
+.music-toggle.off { opacity: 0.4; }
+.music-toggle.off::after { /* slash through the note */
+  content: ""; position: absolute; left: 10px; right: 10px; top: 50%; height: 2px;
+  background: var(--red); transform: rotate(-45deg); border-radius: 2px;
+}
+
 /* ---------------- HUD ---------------- */
 .hud { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 12px; margin: 8px 0 20px; }
 .hud-side.right { display: flex; justify-content: flex-end; }
