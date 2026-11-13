@@ -20,6 +20,8 @@
   const IMPACT_DELAY = 850; // ms between firing and impact (shell flight time)
   const CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   const COMBO_WORDS = ["", "DIRECT HIT!", "DOUBLE STRIKE", "TRIPLE STRIKE", "RAMPAGE", "UNSTOPPABLE", "GODLIKE"];
+  // Sprite art per ship class (public/ships/*.svg, bow pointing right).
+  const SPRITE = { dread: "dreadnought", cruiser: "battlecruiser", destroyer: "destroyer", sub: "submarine", corvette: "corvette" };
   const UNKNOWN = 0, MISS = 1, HIT = 2, SUNK = 3, PENDING = 4, REVEAL = 5;
 
   // ---------- helpers ----------
@@ -55,6 +57,7 @@
     room: null, pusher: null, channel: null, config: null,
     phase: "lobby", // lobby | placing | battle | over
     ships: [], grid: new Array(N * N).fill(-1),
+    enemyWrecks: new Map(),
     incoming: new Set(), incomingShown: new Set(), incomingResults: new Map(), lastResult: null,
     oppAway: false, awayTimer: null, offline: false,
     enemy: new Array(N * N).fill(UNKNOWN), enemySunk: new Set(),
@@ -105,6 +108,30 @@
 
   const myCells = buildBoard($("myBoard"), { click: onMyCell, hover: (i) => { if (S.hover !== i) { S.hover = i; renderMine(); } } });
   const enemyCells = buildBoard($("enemyBoard"), { click: (i) => fire(i) });
+
+  // One sprite per ship, drawn on a layer above the cell backgrounds but below the hit / sunk markers.
+  function spriteLayer(board) {
+    const layer = document.createElement("div");
+    layer.className = "sprites";
+    layer.setAttribute("aria-hidden", "true");
+    board.appendChild(layer);
+    return layer;
+  }
+  const mySprites = spriteLayer($("myBoard"));
+  const enemySprites = spriteLayer($("enemyBoard"));
+
+  function drawSprites(layer, list) {
+    while (layer.children.length < list.length) layer.appendChild(document.createElement("div"));
+    [...layer.children].forEach((el, k) => {
+      const s = list[k];
+      if (!s) { el.className = "sprite hidden"; return; }
+      const origin = Math.min(...s.cells);
+      const cls = "sprite" + (s.h ? "" : " v") + (s.cls ? " " + s.cls : "");
+      const style = `--r:${Math.floor(origin / N)};--c:${origin % N};--len:${s.cells.length};background-image:url(ships/${SPRITE[s.id]}.svg)`;
+      if (el.className !== cls) el.className = cls;
+      if (el.style.cssText !== style) el.style.cssText = style;
+    });
+  }
 
   // ---------- placement ----------
   function resetShips() {
@@ -191,6 +218,11 @@
       if (i === S.lastMine) cls += " last";
       el.className = cls;
     });
+    const list = S.ships.filter((s) => s.cells.length === s.len).map((s) => ({
+      id: s.id, cells: s.cells, h: s.h, cls: s.cells.every((c) => S.incomingShown.has(c)) ? "sunk" : "",
+    }));
+    if (preview && previewOk) list.push({ id: S.ships[S.selected].id, cells: [...preview], h: S.horizontal, cls: "ghost" });
+    drawSprites(mySprites, list);
   }
 
   function renderEnemy() {
@@ -198,6 +230,9 @@
     enemyCells.forEach((el, i) => {
       el.className = "cell " + CLS[S.enemy[i]] + (i === S.lastEnemy ? " last" : "");
     });
+    drawSprites(enemySprites, [...S.enemyWrecks.entries()].map(([id, cells]) => ({
+      id, cells, h: cells.length > 1 && Math.abs(cells[1] - cells[0]) === 1, cls: "sunk wreck",
+    })));
     $("enemyBoard").classList.toggle("armed", myTurn() && !S.awaiting && !S.animLock && !S.offline && !S.oppAway);
   }
 
@@ -209,10 +244,12 @@
       item.className = "ship-item" + (si === S.selected ? " selected" : "") + (s.cells.length ? " placed" : "");
       const name = document.createElement("span");
       name.className = "ship-name"; name.textContent = s.name;
-      const pips = document.createElement("span");
-      pips.className = "ship-pips";
-      for (let k = 0; k < s.len; k++) pips.appendChild(document.createElement("i"));
-      item.append(name, pips);
+      const thumb = document.createElement("img");
+      thumb.className = "ship-thumb";
+      thumb.src = `ships/${SPRITE[s.id]}.svg`;
+      thumb.alt = "";
+      thumb.style.setProperty("--len", s.len);
+      item.append(name, thumb);
       item.addEventListener("click", () => {
         if (S.myReady) return;
         if (s.cells.length) { removeShip(si); S.horizontal = s.h; }
@@ -579,7 +616,7 @@
     S.myReady = false; S.oppReady = false; S.myRematch = false; S.oppRematch = false;
     S.myNonce = ""; S.oppNonce = "";
     S.awaiting = null; S.turn = null; S.prevTurn = null; S.animLock = 0;
-    S.incoming.clear(); S.incomingShown.clear(); S.incomingResults.clear(); S.lastResult = null; S.enemy.fill(UNKNOWN); S.enemySunk.clear();
+    S.incoming.clear(); S.incomingShown.clear(); S.incomingResults.clear(); S.lastResult = null; S.enemy.fill(UNKNOWN); S.enemySunk.clear(); S.enemyWrecks.clear();
     S.ships.forEach((s) => (s.hits = 0));
     S.lastEnemy = S.lastMine = -1;
     if (msg) toast(msg);
@@ -602,7 +639,7 @@
 
   function startBattle() {
     S.phase = "battle";
-    S.enemy.fill(UNKNOWN); S.enemySunk.clear(); S.incoming.clear(); S.incomingShown.clear(); S.incomingResults.clear(); S.lastResult = null;
+    S.enemy.fill(UNKNOWN); S.enemySunk.clear(); S.enemyWrecks.clear(); S.incoming.clear(); S.incomingShown.clear(); S.incomingResults.clear(); S.lastResult = null;
     S.ships.forEach((s) => (s.hits = 0));
     S.stats = { shots: 0, hits: 0, combo: 0, maxCombo: 0 };
     S.lastEnemy = S.lastMine = -1; S.awaiting = null; S.prevTurn = null;
@@ -720,6 +757,8 @@
         if (sunk && Array.isArray(d.sunk.cells)) {
           d.sunk.cells.forEach((c) => { if (Number.isInteger(c) && c >= 0 && c < N * N) S.enemy[c] = SUNK; });
           S.enemySunk.add(sunk.id);
+          const wreck = d.sunk.cells.filter((c) => Number.isInteger(c) && c >= 0 && c < N * N).sort((a, b) => a - b);
+          if (wreck.length === sunk.len) S.enemyWrecks.set(sunk.id, wreck);
           fxBoom(el, 2); shake(true); sfx("sink");
           announce(`${sunk.name.toUpperCase()} SUNK!`, combo > 1 ? `${combo}-hit chain` : "");
           log(`🔥 You sank the enemy ${sunk.name}!`, "epic");
