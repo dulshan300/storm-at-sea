@@ -33,14 +33,30 @@
       </div>
 
       <div class="panel lobby-panel">
-        <label class="field">
+        <div class="account-bar" id="accountBar">
+          <div class="account-guest" id="accountGuest">
+            <span>Sailing as a guest</span>
+            <button class="btn btn-link" id="signInBtn" type="button">Sign in</button>
+            <button class="btn btn-link" id="registerBtn" type="button">Create account</button>
+          </div>
+          <div class="account-user hidden" id="accountUser">
+            <span class="account-name">⚓ <b id="accountName"></b></span>
+            <span class="rating-pill" id="accountRating" title="Rating"></span>
+            <button class="btn btn-link" id="signOutBtn" type="button">Sign out</button>
+          </div>
+        </div>
+
+        <label class="field" id="nameField">
           <span>Captain's name</span>
           <input id="nameInput" maxlength="16" placeholder="Admiral Nobody" autocomplete="off" />
         </label>
 
-        <button class="btn btn-gold btn-lg" id="createBtn">⚔ Raise a New Battle</button>
+        <button class="btn btn-gold btn-lg" id="quickBtn">⚡ Quick Match</button>
+        <p class="hint center" id="quickNote">Ranked when both captains are signed in.</p>
 
-        <div class="divider"><span>or join an ally's war room</span></div>
+        <div class="divider"><span>or battle a friend</span></div>
+
+        <button class="btn btn-steel" id="createBtn">⚔ Raise a Private Battle</button>
 
         <div class="join-row">
           <input id="codeInput" maxlength="8" placeholder="ROOM CODE" autocomplete="off" />
@@ -48,6 +64,12 @@
         </div>
         <p class="error" id="lobbyError" role="alert"></p>
       </div>
+
+      <section class="panel ranks" aria-labelledby="ranksTitle">
+        <h2 id="ranksTitle">Hall of Admirals</h2>
+        <ol class="rank-list" id="rankList"><li class="rank-empty">Charting the seas…</li></ol>
+        <p class="rank-me" id="rankMe"></p>
+      </section>
 
       <ol class="howto">
         <li><b>Deploy</b> five warships on your grid.</li>
@@ -60,6 +82,7 @@
     <section id="game" class="screen">
       <header class="hud">
         <div class="hud-side">
+          <button class="btn btn-link hud-leave" id="hudLeaveBtn" title="Back to the lobby">← Leave</button>
           <div class="captain me"><span class="dot"></span><span id="meName">You</span></div>
         </div>
         <div class="hud-center">
@@ -85,7 +108,7 @@
         <div class="board-wrap" id="placeWrap">
           <h2 class="board-title">Shipyard</h2>
           <div class="panel place-panel">
-            <p class="hint">Pick a ship, then click your grid to deploy it. Click a deployed ship to move it. Press <kbd>R</kbd> to rotate.</p>
+            <p class="hint">Pick a ship, then tap your grid to deploy it. Tap a deployed ship to move it.<span class="kbd-tip"> Press <kbd>R</kbd> to rotate.</span></p>
             <div class="ship-list" id="shipList"></div>
             <div class="place-actions">
               <button class="btn btn-steel" id="rotateBtn">↻ Rotate <small id="orient">Horizontal</small></button>
@@ -120,10 +143,31 @@
       <h2 id="ovTitle">VICTORY</h2>
       <p id="ovText"></p>
       <div class="stats" id="ovStats"></div>
+      <p class="rating-note" id="ovRating"></p>
       <button class="btn btn-gold btn-lg" id="rematchBtn">⚔ Rematch</button>
       <p class="ready-note" id="rematchNote"></p>
       <button class="btn btn-link" id="leaveBtn">Leave battle</button>
     </div>
+  </div>
+
+  <!-- Sign in / create account -->
+  <div class="overlay" id="authModal" role="dialog" aria-modal="true" aria-labelledby="authTitle">
+    <form class="overlay-card auth-card" id="authForm" novalidate>
+      <h2 id="authTitle">Sign In</h2>
+      <p class="auth-sub" id="authSub">Track your record and climb the Hall of Admirals.</p>
+      <label class="field">
+        <span>Captain's name</span>
+        <input id="authName" maxlength="16" autocomplete="username" required />
+      </label>
+      <label class="field">
+        <span>Password</span>
+        <input id="authPass" type="password" maxlength="72" autocomplete="current-password" required />
+      </label>
+      <p class="error" id="authError" role="alert"></p>
+      <button class="btn btn-gold btn-lg" id="authSubmit" type="submit">Sign In</button>
+      <button class="btn btn-link" id="authSwitch" type="button">New here? Create an account</button>
+      <button class="btn btn-link" id="authClose" type="button">Cancel</button>
+    </form>
   </div>
 
   <div class="toast" id="toast"></div>
@@ -131,5 +175,6 @@
   <script src="https://js.pusher.com/8.2.0/pusher.min.js"></script>
   <script src="audio.js"></script>
   <script src="game.js"></script>
+  <script src="profile.js"></script>
 </body>
 </html>

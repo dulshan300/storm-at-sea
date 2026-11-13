@@ -24,6 +24,7 @@
 
 * { box-sizing: border-box; }
 html, body { margin: 0; min-height: 100%; }
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; overscroll-behavior-y: none; } /* no pull-to-refresh mid-battle */
 body {
   background: var(--bg);
   color: var(--text);
@@ -138,6 +139,7 @@ input:focus { border-color: var(--gold); box-shadow: 0 0 0 3px rgba(232, 184, 74
 .btn {
   border: 0; cursor: pointer; border-radius: 10px; padding: 11px 16px; font-weight: 700;
   letter-spacing: 0.06em; transition: transform 0.12s, filter 0.2s, box-shadow 0.2s; white-space: nowrap;
+  touch-action: manipulation; min-height: 44px;
 }
 .btn:active:not(:disabled) { transform: translateY(1px) scale(0.98); }
 .btn:disabled { opacity: 0.45; cursor: not-allowed; filter: grayscale(0.6); }
@@ -154,7 +156,7 @@ input:focus { border-color: var(--gold); box-shadow: 0 0 0 3px rgba(232, 184, 74
   box-shadow: 0 4px 0 #0c1626;
 }
 .btn-steel:hover:not(:disabled) { filter: brightness(1.15); }
-.btn-link { background: none; color: var(--muted); text-decoration: underline; }
+.btn-link { min-height: 0; background: none; color: var(--muted); text-decoration: underline; }
 .btn small { opacity: 0.7; font-weight: 600; margin-left: 4px; }
 
 .sound-toggle {
@@ -222,6 +224,7 @@ input:focus { border-color: var(--gold); box-shadow: 0 0 0 3px rgba(232, 184, 74
   background: rgba(14, 74, 112, 0.18); transition: background 0.15s;
 }
 .enemy-board.armed .cell.unknown { cursor: crosshair; }
+@media (hover: hover) {
 .enemy-board.armed .cell.unknown:hover {
   background: rgba(255, 90, 31, 0.25);
   box-shadow: inset 0 0 0 2px rgba(255, 179, 71, 0.8), 0 0 18px rgba(255, 90, 31, 0.5); z-index: 2;
@@ -231,6 +234,8 @@ input:focus { border-color: var(--gold); box-shadow: 0 0 0 3px rgba(232, 184, 74
   border: 2px solid var(--ember); box-shadow: 0 0 10px var(--fire);
   background: radial-gradient(circle, var(--ember) 0 2px, transparent 3px);
 }
+}
+.enemy-board.armed .cell.unknown:active { background: rgba(255, 90, 31, 0.4); box-shadow: inset 0 0 0 2px var(--ember); }
 
 /* Ships */
 .cell.ship {
@@ -310,7 +315,7 @@ kbd { background: var(--steel); border-radius: 4px; padding: 0 6px; border: 1px 
 .ship-item.placed .ship-name::after { content: " ✓"; color: var(--ok); }
 .ship-name { font-weight: 700; letter-spacing: 0.04em; }
 .ship-pips { display: flex; gap: 3px; }
-.ship-pips i { width: 14px; height: 10px; border-radius: 3px; background: linear-gradient(180deg, #8597ad, #3b4a5e); }
+.ship-pips i { flex: none; width: 14px; height: 10px; border-radius: 3px; background: linear-gradient(180deg, #8597ad, #3b4a5e); }
 .place-actions { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
 .place-actions .btn { padding: 10px 6px; font-size: 15px; }
 .ready-note { text-align: center; color: var(--muted); margin: 0; min-height: 1.2em; }
@@ -409,7 +414,8 @@ kbd { background: var(--steel); border-radius: 4px; padding: 0 6px; border: 1px 
 .overlay-card {
   width: min(480px, 100%); text-align: center; padding: 28px 24px; border-radius: 18px;
   background: linear-gradient(180deg, #15243c, #080f1b); border: 2px solid var(--gold);
-  box-shadow: 0 0 80px rgba(232, 184, 74, 0.25); max-height: calc(100vh - 32px); overflow-y: auto;
+  box-shadow: 0 0 80px rgba(232, 184, 74, 0.25); max-height: calc(100vh - 32px); max-height: calc(100dvh - 32px); overflow-y: auto;
+  overscroll-behavior: contain;
 }
 .overlay-card.defeat { border-color: var(--red); box-shadow: 0 0 80px rgba(229, 56, 59, 0.25); }
 .overlay-emblem { font-size: 60px; }
@@ -429,7 +435,53 @@ kbd { background: var(--steel); border-radius: 4px; padding: 0 6px; border: 1px 
   position: fixed; left: 50%; bottom: 24px; transform: translate(-50%, 140%); z-index: 80; transition: transform 0.3s;
   background: #101c30; border: 1px solid var(--gold); border-radius: 999px; padding: 10px 18px; max-width: calc(100vw - 32px);
 }
+.toast:not(.show) { visibility: hidden; transition: transform 0.3s, visibility 0s 0.3s; }
 .toast.show { transform: translate(-50%, 0); }
+
+/* ---------------- Accounts / quick match / ranks ---------------- */
+.account-bar { font-size: 15px; color: var(--muted); border-bottom: 1px solid var(--line); padding-bottom: 12px; }
+.account-guest, .account-user { display: flex; align-items: center; gap: 4px 10px; flex-wrap: wrap; }
+.account-guest span { margin-right: auto; }
+.account-bar .btn-link { padding: 4px 2px; color: var(--gold-2); }
+.account-name { margin-right: auto; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rating-pill {
+  font-weight: 700; color: var(--gold-2); padding: 2px 10px; border-radius: 999px;
+  border: 1px solid rgba(232, 184, 74, 0.4); background: rgba(232, 184, 74, 0.08); white-space: nowrap;
+}
+.hint.center { text-align: center; margin-top: -8px; font-size: 14px; }
+#quickBtn.searching { animation: glow-btn 1.2s ease-in-out infinite; }
+@keyframes glow-btn { 50% { filter: brightness(1.2); box-shadow: 0 6px 0 #6b4a0e, 0 10px 46px rgba(232, 184, 74, 0.7); } }
+
+.ranks { max-width: 460px; margin: 22px auto 0; padding: 18px 20px; }
+.ranks h2 {
+  margin: 0 0 10px; text-align: center; font-family: var(--font-title); letter-spacing: 0.2em;
+  font-size: 16px; color: var(--gold-2); text-transform: uppercase;
+}
+.rank-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.rank-list li {
+  display: grid; grid-template-columns: 2.2em 1fr auto auto; gap: 10px; align-items: center;
+  padding: 6px 10px; border-radius: 8px; background: rgba(3, 8, 16, 0.45); font-variant-numeric: tabular-nums;
+}
+.rank-list li.you { box-shadow: inset 0 0 0 1px var(--gold); background: rgba(232, 184, 74, 0.1); }
+.rank-list .pos { color: var(--muted); font-weight: 700; text-align: right; }
+.rank-list li:nth-child(1) .pos { color: var(--gold-2); }
+.rank-list .who { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 700; }
+.rank-list .rec { color: var(--muted); font-size: 14px; }
+.rank-list .pts { color: var(--gold-2); font-weight: 700; min-width: 3.2em; text-align: right; }
+.rank-list li.rank-empty { display: block; text-align: center; color: var(--muted); background: none; }
+.rank-me { margin: 10px 0 0; text-align: center; color: var(--muted); font-size: 14px; min-height: 1em; }
+.rank-me:empty { display: none; }
+
+.hud-side { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.hud-leave { padding: 6px 4px; font-size: 15px; flex: none; }
+.rating-note { margin: -6px 0 16px; font-weight: 700; color: var(--gold-2) !important; min-height: 1.2em; }
+.rating-note .up { color: var(--ok); }
+.rating-note .down { color: #ff8a8a; }
+
+.auth-card { display: grid; gap: 14px; text-align: left; }
+.auth-card h2 { font-size: 34px; text-align: center; }
+.auth-card .auth-sub { margin: -8px 0 0; text-align: center; }
+.auth-card .btn-link { justify-self: center; }
 
 /* ---------------- Responsive ---------------- */
 @media (max-width: 860px) {
@@ -437,6 +489,8 @@ kbd { background: var(--steel); border-radius: 4px; padding: 0 6px; border: 1px 
   .boards { gap: 22px; }
   .hud { grid-template-columns: 1fr 1fr; }
   .hud-center { grid-column: 1 / -1; order: -1; }
+  /* Phones: the board you tap goes first during battle; your own fleet sits below it. */
+  #enemyWrap { order: -1; }
 }
 @media (max-width: 560px) {
   body { font-size: 16px; }
@@ -446,6 +500,21 @@ kbd { background: var(--steel); border-radius: 4px; padding: 0 6px; border: 1px 
   .radar { inset: 6px 6px 6px calc(2px + var(--cell) * 0.7); top: calc(6px + var(--cell) * 0.7); }
   .place-actions .btn { font-size: 14px; }
   .stats b { font-size: 20px; }
+  .hud { gap: 8px; margin-bottom: 14px; }
+  .captain { padding: 6px 10px; font-size: 15px; }
+  .boards { gap: 16px; }
+  #placeWrap .place-panel { padding: 14px; gap: 10px; }
+  #placeWrap .hint { font-size: 14px; }
+  #placeWrap .hint kbd, #placeWrap .hint .kbd-tip { display: none; }
+  .ship-list { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+  .ship-item { padding: 8px 10px; font-size: 15px; min-width: 0; }
+  .ship-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ship-pips { flex: none; }
+  .ship-pips i { width: 9px; height: 8px; }
+  .overlay-card h2 { font-size: 40px; }
+  .auth-card h2 { font-size: 28px; }
+  .lobby-panel, .ranks { padding: 18px 16px; }
+  .log { margin-top: 18px; max-height: 120px; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; }

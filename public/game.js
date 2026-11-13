@@ -29,6 +29,7 @@
     get(k, s = localStorage) { try { return s.getItem(k); } catch { return null; } },
     set(k, v, s = localStorage) { try { s.setItem(k, v); } catch { /* storage may be blocked */ } },
   };
+  const buzz = (pattern) => { try { navigator.vibrate && navigator.vibrate(pattern); } catch { /* unsupported (iOS) */ } };
   const randInt = (n) => Math.floor(Math.random() * n);
   const coord = (i) => LETTERS[Math.floor(i / N)] + ((i % N) + 1);
   const cleanName = (v) => String(v || "").replace(/[<>&"'`\\]/g, "").trim().slice(0, 16);
@@ -54,9 +55,10 @@
     room: null, pusher: null, channel: null, config: null,
     phase: "lobby", // lobby | placing | battle | over
     ships: [], grid: new Array(N * N).fill(-1),
-    incoming: new Set(), incomingShown: new Set(),
+    incoming: new Set(), incomingShown: new Set(), incomingResults: new Map(), lastResult: null,
+    oppAway: false, awayTimer: null, offline: false,
     enemy: new Array(N * N).fill(UNKNOWN), enemySunk: new Set(),
-    myReady: false, oppReady: false,
+    myReady: false, oppReady: false, myNonce: "", oppNonce: "",
     turn: null, prevTurn: null, gameNo: 0,
     awaiting: null, awaitTimer: null, animLock: 0,
     selected: 0, horizontal: true, hover: null,
@@ -196,7 +198,7 @@
     enemyCells.forEach((el, i) => {
       el.className = "cell " + CLS[S.enemy[i]] + (i === S.lastEnemy ? " last" : "");
     });
-    $("enemyBoard").classList.toggle("armed", myTurn() && !S.awaiting && !S.animLock);
+    $("enemyBoard").classList.toggle("armed", myTurn() && !S.awaiting && !S.animLock && !S.offline && !S.oppAway);
   }
 
   function renderShipList() {
@@ -247,8 +249,9 @@
   }
 
   function renderHud() {
-    $("meName").textContent = S.me.name || "You";
-    $("oppName").textContent = S.opp ? S.opp.name : "Awaiting rival…";
+    const myInfo = window.FleetProfile ? window.FleetProfile.publicInfo() : null;
+    $("meName").textContent = withRating(S.me.name || "You", myInfo);
+    $("oppName").textContent = S.opp ? withRating(S.opp.name, S.opp.info) : "Awaiting rival…";
     $("oppBox").classList.toggle("absent", !S.opp);
     $("roomCode").textContent = S.room || "-----";
     $("oppBox").classList.toggle("turn", S.phase === "battle" && S.opp && S.turn === S.opp.id);
@@ -262,6 +265,8 @@
       else if (S.myReady && !S.oppReady) text = "Enemy is deploying…";
       else if (!S.myReady && S.oppReady) text = "Enemy is ready — deploy!";
       else text = "Deploy your fleet";
+    } else if (S.phase === "battle" && (S.offline || S.oppAway)) {
+      text = S.offline ? "Reconnecting…" : "Rival's signal lost…"; b.classList.add("their-turn");
     } else if (S.phase === "battle") {
       if (myTurn()) { text = "Your turn — FIRE!"; b.classList.add("your-turn"); }
       else { text = "Enemy is taking aim…"; b.classList.add("their-turn"); }
@@ -276,6 +281,9 @@
       b.appendChild(t);
     }
   }
+
+  // Only server-verified accounts (presence user_info) show a rating.
+  const withRating = (name, info) => (info && info.verified && info.rating ? `${name} ★${info.rating}` : name);
 
   function render() {
     const placing = S.phase === "placing";
@@ -375,11 +383,12 @@
     stopTimer();
     if (S.turn !== S.prevTurn) {
       S.prevTurn = S.turn;
-      if (myTurn()) sfx("ping");
+      if (myTurn()) { sfx("ping"); buzz(25); }
     }
     if (myTurn()) {
       S.timeLeft = TURN_SECONDS;
       S.timer = setInterval(() => {
+        if (S.offline || S.oppAway) return; // shot clock pauses while a side is disconnected
         S.timeLeft--;
         if (S.timeLeft <= 5 && S.timeLeft > 0) sfx("tick");
         if (S.timeLeft <= 0) { stopTimer(); autoFire(); }
@@ -401,7 +410,8 @@
     if (!S.channel || !S.opp) return;
     try { S.channel.trigger("client-" + evt, data); } catch (e) { console.warn("send failed", e); }
   }
-  const hello = () => ({ name: S.me.name, ready: S.myReady, gameNo: S.gameNo, info: window.FleetProfile ? window.FleetProfile.publicInfo() : null });
+  const NONCE_RE = /^[a-z0-9]{8}$/;
+  const hello = () => ({ name: S.me.name, ready: S.myReady, nonce: S.myReady ? S.myNonce : "", gameNo: S.gameNo, info: window.FleetProfile ? window.FleetProfile.publicInfo() : null });
 
   async function loadConfig() {
     if (S.config) return S.config;
@@ -412,7 +422,8 @@
   }
 
   function authParams() {
-    return { user_id: S.me.id, name: S.me.name, ...(window.FleetProfile ? window.FleetProfile.authParams() : {}) };
+    // Always the per-tab guest id; the server swaps in the account id when a valid token is sent.
+    return { user_id: guestId, name: S.me.name, ...(window.FleetProfile ? window.FleetProfile.authParams() : {}) };
   }
 
   async function joinRoom(code) {
@@ -423,11 +434,28 @@
       channelAuthorization: { endpoint: "/api/pusher-auth", transport: "ajax", params: authParams() },
     });
     S.room = code;
+    S.pusher.connection.bind("state_changed", ({ current }) => {
+      const offline = current !== "connected";
+      if (offline === S.offline) return;
+      S.offline = offline;
+      if (S.phase === "lobby") return;
+      if (offline) toast("Signal lost — reconnecting…");
+      else log("Signal restored.", "good");
+      render();
+    });
     const ch = S.pusher.subscribe("presence-room-" + code);
     S.channel = ch;
 
     ch.bind("pusher:subscription_succeeded", (members) => {
       if (members.me && members.me.id) S.me.id = members.me.id;
+      if (S.phase !== "lobby") { // pusher-js resubscribed after a dropped connection
+        let oppHere = false;
+        members.each((m) => { if (S.opp && m.id === S.opp.id) oppHere = true; else if (m.id !== S.me.id && !S.opp) setOpp(m); });
+        if (S.opp && !oppHere) oppAway();
+        else if (S.opp) { oppBack(); send("hello", hello()); }
+        render();
+        return;
+      }
       members.each((m) => { if (m.id !== S.me.id && !S.opp) setOpp(m); });
       enterRoom();
       if (S.opp) send("hello", hello());
@@ -439,6 +467,7 @@
     });
     ch.bind("pusher:member_added", (m) => {
       if (S.opp && S.opp.id !== m.id) return; // third wheel; server normally blocks this
+      if (S.opp && S.oppAway) { oppBack(); send("hello", hello()); render(); return; }
       const returning = S.phase === "battle" || S.phase === "over";
       setOpp(m);
       if (returning) restartRound("Rival rejoined — battle reset.");
@@ -447,7 +476,7 @@
       send("hello", hello());
       render();
     });
-    ch.bind("pusher:member_removed", (m) => { if (S.opp && m.id === S.opp.id) oppLeft(); });
+    ch.bind("pusher:member_removed", (m) => { if (S.opp && m.id === S.opp.id) oppAway(); });
 
     ch.bind("client-hello", (d, meta) => {
       if (!S.opp && meta && meta.user_id) S.opp = { id: meta.user_id, name: "Rival", info: {} };
@@ -455,10 +484,11 @@
       if (d && d.name) S.opp.name = cleanName(d.name) || S.opp.name;
       if (d && d.info && typeof d.info === "object") S.opp.helloInfo = d.info;
       S.oppReady = !!(d && d.ready);
+      if (S.oppReady && NONCE_RE.test(d.nonce)) S.oppNonce = d.nonce;
       S.gameNo = Math.max(S.gameNo, (d && Number.isInteger(d.gameNo)) ? d.gameNo : 0);
       render(); checkStart();
     });
-    ch.bind("client-ready", () => { S.oppReady = true; log(`${oppName()} has readied their fleet.`); sfx("lock"); render(); checkStart(); });
+    ch.bind("client-ready", (d) => { S.oppReady = true; if (d && NONCE_RE.test(d.nonce)) S.oppNonce = d.nonce; log(`${oppName()} has readied their fleet.`); sfx("lock"); render(); checkStart(); });
     ch.bind("client-unready", () => { if (S.phase === "placing") { S.oppReady = false; render(); } });
     ch.bind("client-fire", onIncomingFire);
     ch.bind("client-result", onResult);
@@ -495,9 +525,11 @@
     clearTimeout(S.awaitTimer);
     if (S.pusher) { try { S.pusher.disconnect(); } catch { /* ignore */ } }
     Object.assign(S, {
-      pusher: null, channel: null, opp: null, room: null, phase: "lobby", myReady: false, oppReady: false,
+      pusher: null, channel: null, opp: null, room: null, phase: "lobby", myReady: false, oppReady: false, myNonce: "", oppNonce: "",
       turn: null, prevTurn: null, awaiting: null, myRematch: false, oppRematch: false, gameNo: 0, animLock: 0,
+      oppAway: false, offline: false,
     });
+    clearTimeout(S.awayTimer);
     $("overlay").classList.remove("show");
     if (!silent) {
       try { history.replaceState(null, "", location.pathname); } catch { /* ignore */ }
@@ -506,7 +538,29 @@
     }
   }
 
+  // Phones drop the socket when the app is backgrounded or the screen locks. Give the rival time to come back
+  // before treating it as leaving; both sides keep their in-memory game state, so play simply resumes.
+  function oppAway() {
+    if (S.oppAway || !S.opp) return;
+    if (S.phase === "lobby") return oppLeft();
+    S.oppAway = true;
+    const grace = S.phase === "battle" ? 30000 : 12000;
+    log(`⚠ ${oppName()}'s signal was lost. Holding position…`, "bad");
+    clearTimeout(S.awayTimer);
+    S.awayTimer = setTimeout(() => { S.oppAway = false; oppLeft(); }, grace);
+    render();
+  }
+  function oppBack() {
+    if (!S.oppAway) return;
+    S.oppAway = false;
+    clearTimeout(S.awayTimer);
+    log(`${oppName()} is back on the line.`, "good");
+    sfx("join");
+    render();
+  }
+
   function oppLeft() {
+    clearTimeout(S.awayTimer); S.oppAway = false;
     const wasFighting = S.phase === "battle";
     log(`${oppName()} has left the war room.`, "bad");
     S.opp = null; S.oppReady = false; S.oppRematch = false;
@@ -523,8 +577,9 @@
     stopTimer();
     S.phase = "placing";
     S.myReady = false; S.oppReady = false; S.myRematch = false; S.oppRematch = false;
+    S.myNonce = ""; S.oppNonce = "";
     S.awaiting = null; S.turn = null; S.prevTurn = null; S.animLock = 0;
-    S.incoming.clear(); S.incomingShown.clear(); S.enemy.fill(UNKNOWN); S.enemySunk.clear();
+    S.incoming.clear(); S.incomingShown.clear(); S.incomingResults.clear(); S.lastResult = null; S.enemy.fill(UNKNOWN); S.enemySunk.clear();
     S.ships.forEach((s) => (s.hits = 0));
     S.lastEnemy = S.lastMine = -1;
     if (msg) toast(msg);
@@ -536,7 +591,7 @@
     if (S.phase !== "placing" || !allPlaced()) return;
     S.myReady = !S.myReady;
     S.selected = -1;
-    if (S.myReady) { send("ready"); sfx("lock"); log("Your fleet is locked in.", "good"); }
+    if (S.myReady) { S.myNonce = randStr("", 8); send("ready", { nonce: S.myNonce }); sfx("lock"); log("Your fleet is locked in.", "good"); }
     else send("unready");
     render(); checkStart();
   }
@@ -547,13 +602,15 @@
 
   function startBattle() {
     S.phase = "battle";
-    S.enemy.fill(UNKNOWN); S.enemySunk.clear(); S.incoming.clear(); S.incomingShown.clear();
+    S.enemy.fill(UNKNOWN); S.enemySunk.clear(); S.incoming.clear(); S.incomingShown.clear(); S.incomingResults.clear(); S.lastResult = null;
     S.ships.forEach((s) => (s.hits = 0));
     S.stats = { shots: 0, hits: 0, combo: 0, maxCombo: 0 };
     S.lastEnemy = S.lastMine = -1; S.awaiting = null; S.prevTurn = null;
     const ids = [S.me.id, S.opp.id].sort();
     S.turn = ids[S.gameNo % 2];
-    S.matchId = `${S.room}-${S.gameNo}-${ids.map((x) => x.slice(-4)).join("")}`;
+    // Both sides derive the same id; the ready-nonces make it unique even when the same pair replays a room code.
+    const seal = S.myNonce && S.oppNonce ? [S.myNonce, S.oppNonce].sort().join("") : ids.map((x) => x.slice(-4)).join("");
+    S.matchId = `${S.room}-${S.gameNo}-${seal}`;
     sfx("horn");
     announce("BATTLE STATIONS", myTurn() ? "You fire first" : `${oppName()} fires first`);
     log(`⚔ Battle begins! ${myTurn() ? "You have" : oppName() + " has"} the first shot. A hit earns another shot.`, "epic");
@@ -563,6 +620,7 @@
 
   function fire(i) {
     if (!myTurn() || S.awaiting || S.animLock || S.enemy[i] !== UNKNOWN) return;
+    if (S.offline || S.oppAway) { toast(S.offline ? "No signal — hold fire until you reconnect." : "Rival's signal is lost — hold fire."); sfx("deny"); return; }
     stopTimer();
     S.awaiting = { i, at: performance.now() };
     S.enemy[i] = PENDING;
@@ -583,6 +641,14 @@
 
   function onIncomingFire(d) {
     const i = d && Number.isInteger(d.i) ? d.i : -1;
+    if (S.incomingResults.has(i)) { send("result", S.incomingResults.get(i)); return; }
+    // An out-of-turn shot means the shooter never received our last answer (e.g. their phone dropped
+    // the connection). Re-send it so both sides agree on whose turn it is.
+    const last = S.lastResult;
+    if (last && S.opp && ((S.phase === "battle" && S.turn !== S.opp.id) || (S.phase === "over" && last.over))) {
+      send("result", last);
+      return;
+    }
     if (S.phase !== "battle" || !S.opp || S.turn !== S.opp.id || i < 0 || i >= N * N || S.incoming.has(i)) return;
     S.incoming.add(i);
     const si = S.grid[i];
@@ -594,7 +660,10 @@
       if (ship.hits === ship.len) sunk = { id: ship.id, cells: ship.cells.slice() };
     }
     const over = hit && S.ships.every((s) => s.hits === s.len);
-    send("result", { i, hit, sunk, over });
+    const result = { i, hit, sunk, over };
+    S.incomingResults.set(i, result);
+    S.lastResult = result;
+    send("result", result);
     S.turn = over ? null : hit ? S.opp.id : S.me.id;
     if (over) S.phase = "over";
 
@@ -607,7 +676,7 @@
       S.lastMine = i;
       const el = myCells[i];
       if (hit) {
-        fxBoom(el, sunk ? 2 : 1); hitFlash(); shake(!!sunk);
+        fxBoom(el, sunk ? 2 : 1); hitFlash(); shake(!!sunk); buzz(sunk ? [90, 50, 180] : 70);
         sfx(sunk ? "sink" : "explosion");
         log(`💥 Enemy hit your ${ship.name} at ${coord(i)}!`, "bad");
         if (sunk) { announce(`${ship.name.toUpperCase()} LOST`, "", true); log(`☠ Your ${ship.name} has been sunk.`, "bad"); }
@@ -625,7 +694,12 @@
     if (S.phase !== "battle" || i < 0 || i >= N * N) return;
     if (S.enemy[i] !== PENDING && S.enemy[i] !== UNKNOWN) return;
     clearTimeout(S.awaitTimer);
-    const firedAt = S.awaiting ? S.awaiting.at : performance.now() - IMPACT_DELAY;
+    if (S.awaiting && S.awaiting.i !== i && S.enemy[S.awaiting.i] === PENDING) {
+      // A late answer to an earlier shot; the newer shot never counted.
+      S.enemy[S.awaiting.i] = UNKNOWN; S.stats.shots--;
+    }
+    if (S.enemy[i] === UNKNOWN) S.stats.shots++; // the shot had been written off as lost; it counts after all
+    const firedAt = S.awaiting && S.awaiting.i === i ? S.awaiting.at : performance.now() - IMPACT_DELAY;
     S.awaiting = null;
     const hit = !!d.hit, over = !!d.over;
     S.turn = over ? null : hit ? S.me.id : S.opp && S.opp.id;
@@ -698,10 +772,14 @@
     $("rematchBtn").disabled = false;
     $("overlay").classList.add("show");
     sfx(won ? "victory" : "defeat");
+    buzz(won ? [60, 60, 60, 60, 200] : 400);
     log(won ? "🏆 VICTORY! The seas are yours." : "☠ DEFEAT. Your fleet is lost.", won ? "epic" : "bad");
     render();
     window.dispatchEvent(new CustomEvent("fleet:gameover", {
-      detail: { won, matchId: S.matchId, shots: st.shots, hits: st.hits, maxCombo: st.maxCombo, shipsLeft, opponent: oppName() },
+      detail: {
+        won, matchId: S.matchId, room: S.room, shots: st.shots, hits: st.hits, maxCombo: st.maxCombo, shipsLeft,
+        opponent: oppName(), opponentId: S.opp ? S.opp.id : null, opponentVerified: !!(S.opp && S.opp.info && S.opp.info.verified),
+      },
     }));
   }
 
@@ -764,6 +842,10 @@
   $("readyBtn").addEventListener("click", toggleReady);
   $("rematchBtn").addEventListener("click", requestRematch);
   $("leaveBtn").addEventListener("click", () => { sfx("click"); leaveRoom(); });
+  $("hudLeaveBtn").addEventListener("click", () => {
+    if (S.phase === "battle" && !confirm("Abandon this battle?")) return;
+    sfx("click"); leaveRoom();
+  });
   $("roomChip").addEventListener("click", async () => {
     const link = `${location.origin}/?room=${S.room}`;
     try { await navigator.clipboard.writeText(link); toast("Invite link copied — send it to your rival!"); }
